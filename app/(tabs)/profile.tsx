@@ -1,15 +1,11 @@
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
 import { useAuthStore } from '../../store/authStore';
+import { userService } from '../../services/userService';
 import { formatDistance, formatDuration } from '../../utils/formatters';
-
-const MOCK_STATS = {
-  total_rides: 42,
-  total_distance_m: 1_500_000,
-  total_duration_sec: 777_600,
-};
 
 interface MenuItem {
   icon: keyof typeof Ionicons.glyphMap;
@@ -20,6 +16,15 @@ interface MenuItem {
 export default function ProfileScreen() {
   const router = useRouter();
   const { user, clearAuth } = useAuthStore();
+  const [stats, setStats] = useState<{
+    total_rides: number;
+    total_distance_m: number;
+    total_duration_sec: number;
+  } | null>(null);
+
+  useEffect(() => {
+    userService.getStats().then(setStats).catch(() => {});
+  }, []);
 
   const handleLogout = () => {
     Alert.alert('退出登录', '确定要退出吗？', [
@@ -67,20 +72,26 @@ export default function ProfileScreen() {
 
       {/* 骑行统计卡片 */}
       <View style={styles.statsCard}>
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{MOCK_STATS.total_rides}</Text>
-          <Text style={styles.statLabel}>骑行次数</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{formatDistance(MOCK_STATS.total_distance_m)}</Text>
-          <Text style={styles.statLabel}>总里程</Text>
-        </View>
-        <View style={styles.statDivider} />
-        <View style={styles.statItem}>
-          <Text style={styles.statValue}>{formatDuration(MOCK_STATS.total_duration_sec)}</Text>
-          <Text style={styles.statLabel}>骑行时长</Text>
-        </View>
+        {stats ? (
+          <>
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{stats.total_rides}</Text>
+              <Text style={styles.statLabel}>骑行次数</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{formatDistance(stats.total_distance_m)}</Text>
+              <Text style={styles.statLabel}>总里程</Text>
+            </View>
+            <View style={styles.statDivider} />
+            <View style={styles.statItem}>
+              <Text style={styles.statValue}>{formatDuration(stats.total_duration_sec)}</Text>
+              <Text style={styles.statLabel}>骑行时长</Text>
+            </View>
+          </>
+        ) : (
+          <ActivityIndicator color={Colors.primary} style={{ flex: 1, paddingVertical: 12 }} />
+        )}
       </View>
 
       {/* 功能列表 */}

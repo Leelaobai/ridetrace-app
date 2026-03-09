@@ -14,9 +14,9 @@ import { AMAP_KEY, AMAP_SECURITY_CODE } from '../../constants/config';
 
 interface Props {
   trackPoints: { lat: number; lng: number }[];
-  followUser?: boolean;   // 是否自动跟随最新轨迹点
-  // 按下定位按钮时传入当前坐标（ts 保证每次都触发 effect）
+  followUser?: boolean;
   locatePoint?: { lat: number; lng: number; ts: number } | null;
+  userLocation?: { lat: number; lng: number } | null;
   style?: object;
 }
 
@@ -39,7 +39,9 @@ function buildMapHTML(amapKey: string, securityCode: string) {
 
     window._amapLoaded = false;
     window._pendingTrack = null;
+    window._pendingLocation = null;
     window._polyline = null;
+    window._userMarker = null;
     window._map = null;
 
     function initMap() {
@@ -52,10 +54,13 @@ function buildMapHTML(amapKey: string, securityCode: string) {
 
       window._amapLoaded = true;
 
-      // 处理启动前积压的轨迹
       if (window._pendingTrack && window._pendingTrack.length > 0) {
         updateTrack(window._pendingTrack);
         window._pendingTrack = null;
+      }
+      if (window._pendingLocation) {
+        setUserLocation(window._pendingLocation.lat, window._pendingLocation.lng);
+        window._pendingLocation = null;
       }
     }
 
@@ -92,6 +97,28 @@ function buildMapHTML(amapKey: string, securityCode: string) {
       window._map.setCenter(last);
     }
 
+    function setUserLocation(lat, lng) {
+      if (!window._amapLoaded || !window._map) {
+        window._pendingLocation = { lat: lat, lng: lng };
+        return;
+      }
+      var pos = new AMap.LngLat(lng, lat);
+      if (window._userMarker) {
+        window._userMarker.setPosition(pos);
+      } else {
+        var dot = document.createElement('div');
+        dot.style.cssText = 'width:14px;height:14px;border-radius:50%;background:#0de3f2;border:3px solid #fff;box-shadow:0 0 8px rgba(13,227,242,0.7);';
+        window._userMarker = new AMap.Marker({
+          position: pos,
+          content: dot,
+          offset: new AMap.Pixel(-7, -7),
+          zIndex: 200,
+        });
+        window._map.add(window._userMarker);
+        window._map.setCenter(pos);
+      }
+    }
+
     // 接收来自 React Native 的消息
     document.addEventListener('message', function(e) {
       handleMessage(e.data);
@@ -109,6 +136,8 @@ function buildMapHTML(amapKey: string, securityCode: string) {
           if (window._amapLoaded && window._map) {
             window._map.setCenter(new AMap.LngLat(msg.lng, msg.lat));
           }
+        } else if (msg.type === 'SET_LOCATION') {
+          setUserLocation(msg.lat, msg.lng);
         }
       } catch(e) {}
     }
@@ -118,11 +147,10 @@ function buildMapHTML(amapKey: string, securityCode: string) {
 </html>`;
 }
 
-export function AMapView({ trackPoints, followUser = true, locatePoint, style }: Props) {
+export function AMapView({ trackPoints, followUser = true, locatePoint, userLocation, style }: Props) {
   const webViewRef = useRef<WebView>(null);
   const prevLenRef = useRef(0);
 
-  // 有新轨迹点时推送到 WebView
   useEffect(() => {
     if (trackPoints.length === prevLenRef.current) return;
     prevLenRef.current = trackPoints.length;
@@ -133,13 +161,19 @@ export function AMapView({ trackPoints, followUser = true, locatePoint, style }:
     );
   }, [trackPoints]);
 
-  // 定位按钮：将地图中心移到指定坐标
   useEffect(() => {
     if (!locatePoint || !webViewRef.current) return;
     webViewRef.current.postMessage(
       JSON.stringify({ type: 'SET_CENTER', lat: locatePoint.lat, lng: locatePoint.lng })
     );
   }, [locatePoint]);
+
+  useEffect(() => {
+    if (!userLocation || !webViewRef.current) return;
+    webViewRef.current.postMessage(
+      JSON.stringify({ type: 'SET_LOCATION', lat: userLocation.lat, lng: userLocation.lng })
+    );
+  }, [userLocation]);
 
   return (
     <View style={[styles.container, style]}>

@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
 import { useAuthStore } from '../../store/authStore';
 import { login, register } from '../../services/authService';
+import { getErrorMessage, getErrorCode } from '../../utils/errors';
 
 type Tab = 'login' | 'register';
 
@@ -46,8 +47,8 @@ export default function LoginScreen() {
       } else {
         router.replace('/vehicle/select');
       }
-    } catch (e: any) {
-      setError(e?.response?.data?.error || '登录失败，请重试');
+    } catch (e) {
+      setError(getErrorMessage(e, '登录失败，请检查网络连接'));
     } finally {
       setLoading(false);
     }
@@ -68,8 +69,12 @@ export default function LoginScreen() {
       const res = await register(email.trim(), username.trim(), password);
       setAuth(res.token, res.user, res.has_vehicle);
       router.replace('/vehicle/select');
-    } catch (e: any) {
-      setError(e?.response?.data?.error || '注册失败，请重试');
+    } catch (e) {
+      setError(getErrorMessage(e, '注册失败，请检查网络连接'));
+      const code = getErrorCode(e);
+      if (code === 'AUTH_EMAIL_EXISTS' || code === 'AUTH_USERNAME_EXISTS') {
+        setTimeout(() => setTab('login'), 1500);
+      }
     } finally {
       setLoading(false);
     }

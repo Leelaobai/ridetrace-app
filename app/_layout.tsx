@@ -12,6 +12,7 @@ import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
 import { Colors } from '../constants/colors';
 import { useAuthStore } from '../store/authStore';
+import { getMyVehicle } from '../services/vehicleService';
 import { pointCache } from '../utils/pointCache';
 import { wgs84ToGcj02 } from '../utils/coordTransform';
 import type { User } from '../types';
@@ -48,7 +49,7 @@ export default function RootLayout() {
   const [bootstrapped, setBootstrapped] = useState(false);
   const router = useRouter();
   const segments = useSegments();
-  const { token, hasVehicle, setAuth, clearAuth } = useAuthStore();
+  const { token, hasVehicle, setAuth, setVehicle, clearAuth } = useAuthStore();
 
   useEffect(() => {
     const bootstrapAuth = async () => {
@@ -57,14 +58,24 @@ export default function RootLayout() {
         const storedUser = await AsyncStorage.getItem('auth_user');
         const storedHasVehicle = await AsyncStorage.getItem('auth_has_vehicle');
 
-        // 开发阶段：mock token 不持久化，每次都走登录页
-        if (storedToken && storedToken !== 'mock-jwt-token-dev' && storedUser) {
+        if (storedToken && storedUser) {
           const user: User = JSON.parse(storedUser);
-          const hv =
-            storedHasVehicle != null
-              ? JSON.parse(storedHasVehicle)
-              : false;
+          const hv = storedHasVehicle != null ? JSON.parse(storedHasVehicle) : false;
           setAuth(storedToken, user, hv);
+
+          if (hv) {
+            const storedVId = await AsyncStorage.getItem('auth_vehicle_id');
+            const storedVName = await AsyncStorage.getItem('auth_vehicle_nickname');
+            const storedVDist = await AsyncStorage.getItem('auth_vehicle_total_distance_m');
+            if (storedVId && storedVName) {
+              setVehicle(storedVId, storedVName, Number(storedVDist) || 0);
+            } else {
+              try {
+                const mine = await getMyVehicle();
+                setVehicle(mine.id, mine.nickname, mine.total_distance_m);
+              } catch {}
+            }
+          }
         } else {
           clearAuth();
         }
@@ -76,7 +87,7 @@ export default function RootLayout() {
     };
 
     bootstrapAuth();
-  }, [clearAuth, setAuth]);
+  }, [clearAuth, setAuth, setVehicle]);
 
   useEffect(() => {
     if (!bootstrapped || !fontsLoaded) return;

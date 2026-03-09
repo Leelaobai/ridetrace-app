@@ -7,12 +7,14 @@ import {
   FlatList,
   ActivityIndicator,
   SafeAreaView,
+  Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
 import { useAuthStore } from '../../store/authStore';
-import { getVehicleModels, selectVehicle, type VehicleModel } from '../../services/vehicleService';
+import { getVehicleModels, selectVehicle, getMyVehicle, type VehicleModel } from '../../services/vehicleService';
+import { getErrorMessage } from '../../utils/errors';
 
 const CATEGORY_LABEL: Record<string, string> = {
   road: '公路车',
@@ -24,7 +26,7 @@ const CATEGORY_LABEL: Record<string, string> = {
 
 export default function VehicleSelectScreen() {
   const router = useRouter();
-  const { setHasVehicle } = useAuthStore();
+  const { setVehicle } = useAuthStore();
 
   const [vehicles, setVehicles] = useState<VehicleModel[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -37,12 +39,16 @@ export default function VehicleSelectScreen() {
 
   const handleConfirm = async () => {
     if (!selected) return;
-    const vehicle = vehicles.find(v => v.id === selected)!;
+    const model = vehicles.find(v => v.id === selected)!;
+    const nickname = `我的${CATEGORY_LABEL[model.category] ?? model.name}`;
     setConfirming(true);
     try {
-      await selectVehicle(selected, `我的${CATEGORY_LABEL[vehicle.category] ?? vehicle.name}`);
-      setHasVehicle(true);
+      const created = await selectVehicle(selected, nickname);
+      const mine = await getMyVehicle();
+      setVehicle(mine.id, mine.nickname, mine.total_distance_m);
       router.replace('/(tabs)/cockpit');
+    } catch (e) {
+      Alert.alert('选择失败', getErrorMessage(e, '请稍后重试'));
     } finally {
       setConfirming(false);
     }

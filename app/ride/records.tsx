@@ -25,10 +25,10 @@ export default function RideRecordsScreen() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    rideService.getRides().then(data => {
-      setRides(data.rides);
-      setLoading(false);
-    });
+    rideService.getRides()
+      .then(data => setRides(data.rides ?? []))
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   const totalDistance = rides.reduce((s, r) => s + r.distance_m, 0);

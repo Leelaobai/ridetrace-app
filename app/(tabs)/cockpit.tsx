@@ -7,11 +7,15 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { Colors } from '../../constants/colors';
+import { GPS_ACCURACY_GOOD, GPS_ACCURACY_WEAK } from '../../constants/config';
 import { useRideStore } from '../../store/rideStore';
+import { useAuthStore } from '../../store/authStore';
 import { rideService } from '../../services/rideService';
+import { getErrorMessage } from '../../utils/errors';
 import { AMapView } from '../../components/map/AMapView';
 import { useLocation } from '../../hooks/useLocation';
 import { pointCache } from '../../utils/pointCache';
+import { wgs84ToGcj02 } from '../../utils/coordTransform';
 import { BACKGROUND_LOCATION_TASK } from '../_layout';
 
 // ─── 工具 ──────────────────────────────────────────────
@@ -98,13 +102,18 @@ const ctrlStyles = StyleSheet.create({
 });
 
 // ─── 状态A：准备起骑 底部面板 ─────────────────────────
-function ReadyPanel({ onStart }: { onStart: () => void }) {
+function ReadyPanel({ onStart, vehicleName, totalDistanceM }: {
+  onStart: () => void;
+  vehicleName: string;
+  totalDistanceM: number;
+}) {
+  const distKm = (totalDistanceM / 1000).toFixed(0);
   return (
     <View style={panelStyles.wrap}>
       <View style={panelStyles.vehicleRow}>
         <View>
-          <Text style={panelStyles.vehicleName}>Lishi Gravel V4</Text>
-          <Text style={panelStyles.vehicleMeta}>总里程 1,240 km · 准备就绪</Text>
+          <Text style={panelStyles.vehicleName}>{vehicleName}</Text>
+          <Text style={panelStyles.vehicleMeta}>总里程 {distKm} km · 准备就绪</Text>
         </View>
         <View style={panelStyles.readyBadge}>
           <Text style={panelStyles.readyBadgeText}>系统已激活</Text>
@@ -259,18 +268,91 @@ const panelStyles = StyleSheet.create({
 });
 
 // ─── 主驾驶舱页面 ─────────────────────────────────────
+type GpsQuality = 'good' | 'weak' | 'none';
+
+function gpsQualityFromAccuracy(accuracy: number | null): GpsQuality {
+  if (accuracy == null) return 'none';
+  if (accuracy <= GPS_ACCURACY_GOOD) return 'good';
+  if (accuracy <= GPS_ACCURACY_WEAK) return 'weak';
+  return 'none';
+}
+
+const GPS_LABEL: Record<GpsQuality, string> = {
+  good: 'GPS 信号：良好',
+  weak: 'GPS 信号：较弱',
+  none: 'GPS 信号：搜索中',
+};
+const GPS_COLOR: Record<GpsQuality, string> = {
+  good: Colors.primary,
+  weak: Colors.warning,
+  none: Colors.textMuted,
+};
+
 export default function CockpitScreen() {
   const router = useRouter();
   const store = useRideStore();
+  const { vehicleId, vehicleNickname, vehicleTotalDistanceM } = useAuthStore();
   const [tick, setTick] = useState(0);
   const [avgSpeed, setAvgSpeed] = useState(0);
   const [locatePoint, setLocatePoint] = useState<{ lat: number; lng: number; ts: number } | null>(null);
+  const [initialLocation, setInitialLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsQuality, setGpsQuality] = useState<GpsQuality>('none');
   const { startTracking, stopTracking } = useLocation();
 
-  const handleLocate = () => {
+  const handleLocate = async () => {
     const last = store.trackPoints[store.trackPoints.length - 1];
-    if (last) setLocatePoint({ lat: last.lat, lng: last.lng, ts: Date.now() });
+    if (last) {
+      setLocatePoint({ lat: last.lat, lng: last.lng, ts: Date.now() });
+      return;
+    }
+    if (initialLocation) {
+      setLocatePoint({ ...initialLocation, ts: Date.now() });
+      return;
+    }
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const point = wgs84ToGcj02(loc.coords.latitude, loc.coords.longitude);
+      setInitialLocation(point);
+      setLocatePoint({ ...point, ts: Date.now() });
+    } catch {}
   };
+
+  useEffect(() => {
+    let sub: Location.LocationSubscription | null = null;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') return;
+
+        const cached = await Location.getLastKnownPositionAsync();
+        if (cached) {
+          setInitialLocation(wgs84ToGcj02(cached.coords.latitude, cached.coords.longitude));
+          setGpsQuality(gpsQualityFromAccuracy(cached.coords.accuracy));
+        }
+
+        const fast = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        setInitialLocation(wgs84ToGcj02(fast.coords.latitude, fast.coords.longitude));
+        setGpsQuality(gpsQualityFromAccuracy(fast.coords.accuracy));
+
+        sub = await Location.watchPositionAsync(
+          { accuracy: Location.Accuracy.High, timeInterval: 3000, distanceInterval: 5 },
+          (pos) => {
+            setInitialLocation(wgs84ToGcj02(pos.coords.latitude, pos.coords.longitude));
+            setGpsQuality(gpsQualityFromAccuracy(pos.coords.accuracy));
+          },
+        );
+      } catch {
+        try {
+          const last = await Location.getLastKnownPositionAsync();
+          if (last) {
+            setInitialLocation(wgs84ToGcj02(last.coords.latitude, last.coords.longitude));
+            setGpsQuality(gpsQualityFromAccuracy(last.coords.accuracy));
+          }
+        } catch {}
+      }
+    })();
+    return () => { sub?.remove(); };
+  }, []);
 
   // 每秒刷新计时器 + 均速计算
   useEffect(() => {
@@ -316,10 +398,20 @@ export default function CockpitScreen() {
   };
 
   const handleStart = async () => {
-    const res = await rideService.startRide('mock-vehicle-001', 31.2304, 121.4737);
-    store.startRide(res.id, 'mock-vehicle-001');
-    await startTracking();
-    await startBackgroundTracking();
+    if (!vehicleId) {
+      Alert.alert('未选择座驾', '请先选择一个座驾');
+      return;
+    }
+    const lat = initialLocation?.lat ?? 31.2304;
+    const lng = initialLocation?.lng ?? 121.4737;
+    try {
+      const res = await rideService.startRide(vehicleId, lat, lng);
+      store.startRide(res.id, vehicleId);
+      await startTracking();
+      await startBackgroundTracking();
+    } catch (e) {
+      Alert.alert('开始失败', getErrorMessage(e, '请检查网络连接'));
+    }
   };
 
   const handlePause = async () => {
@@ -341,7 +433,8 @@ export default function CockpitScreen() {
         text: '结束', style: 'destructive', onPress: async () => {
           stopTracking();
           await stopBackgroundTracking();
-          const rideId = store.rideId ?? 'mock-001';
+          const rideId = store.rideId;
+          if (!rideId) return;
           // 强制上传所有缓存点
           await store.flushPoints();
           await pointCache.clear();
@@ -358,7 +451,7 @@ export default function CockpitScreen() {
   return (
     <View style={styles.container}>
       {/* 高德地图层 */}
-      <AMapView trackPoints={store.trackPoints} locatePoint={locatePoint} style={{ flex: 1 }} />
+      <AMapView trackPoints={store.trackPoints} locatePoint={locatePoint} userLocation={initialLocation} style={{ flex: 1 }} />
 
       {/* 悬浮 UI 层 */}
       <View style={styles.overlay} pointerEvents="box-none">
@@ -373,8 +466,10 @@ export default function CockpitScreen() {
         {store.status === 'ready' && (
           <View style={styles.topLeft}>
             <View style={styles.gpsBadge}>
-              <Ionicons name="locate" size={14} color={Colors.primary} />
-              <Text style={styles.gpsText}>GPS 定位：良好</Text>
+              <Ionicons name="locate" size={14} color={GPS_COLOR[gpsQuality]} />
+              <Text style={[styles.gpsText, { color: GPS_COLOR[gpsQuality] }]}>
+                {GPS_LABEL[gpsQuality]}
+              </Text>
             </View>
           </View>
         )}
@@ -387,7 +482,13 @@ export default function CockpitScreen() {
 
       {/* 底部面板 */}
       <View style={styles.bottom}>
-        {store.status === 'ready' && <ReadyPanel onStart={handleStart} />}
+        {store.status === 'ready' && (
+          <ReadyPanel
+            onStart={handleStart}
+            vehicleName={vehicleNickname ?? '我的座驾'}
+            totalDistanceM={vehicleTotalDistanceM}
+          />
+        )}
         {store.status !== 'ready' && (
           <StatsPanel
             speedKmh={store.currentSpeedKmh}
