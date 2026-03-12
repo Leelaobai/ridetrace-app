@@ -30,7 +30,7 @@ function smoothCoords(
   return { lat: avgLat, lng: avgLng };
 }
 
-export function useLocation() {
+export function useLocation(onRawLocation?: (pt: { lat: number; lng: number }) => void) {
   const addPoint = useRideStore(s => s.addPoint);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const smoothBufRef = useRef<{ lat: number; lng: number }[]>([]);
@@ -57,6 +57,11 @@ export function useLocation() {
         if (!shouldAccept(accuracy, speedMs)) return;
 
         const raw = wgs84ToGcj02(latitude, longitude);
+
+        // 实时 GPS 原始坐标 → 供地图用户点位实时跟随（无滞后）
+        onRawLocation?.(raw);
+
+        // 平滑后坐标 → 仅用于录制轨迹（减少噪声，允许 2-3s 滞后）
         const { lat, lng } = smoothCoords(smoothBufRef.current, raw.lat, raw.lng);
 
         const point = {

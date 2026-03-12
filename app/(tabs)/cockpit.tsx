@@ -473,10 +473,12 @@ export default function CockpitScreen() {
   const [avgSpeed, setAvgSpeed] = useState(0);
   const [locatePoint, setLocatePoint] = useState<{ lat: number; lng: number; ts: number } | null>(null);
   const [initialLocation, setInitialLocation] = useState<{ lat: number; lng: number } | null>(null);
+  const [liveLocation, setLiveLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsQuality, setGpsQuality] = useState<GpsQuality>('none');
   const [showVehiclePicker, setShowVehiclePicker] = useState(false);
   const { setVehicle } = useAuthStore();
-  const { startTracking, stopTracking } = useLocation();
+  // onRawLocation：骑行中收到原始 GPS（已转 GCJ-02），直接更新地图用户点，无平滑滞后
+  const { startTracking, stopTracking } = useLocation((raw) => setLiveLocation(raw));
 
   const handleVehicleSelect = async (v: MyVehicleDetail) => {
     setShowVehiclePicker(false);
@@ -721,10 +723,11 @@ export default function CockpitScreen() {
 
   const durationSec = store.ridingDurationSec();
 
-  // 骑行中：用户点跟轨迹尖端（每次 addPoint 都会更新）
-  // 非骑行：用户点跟独立定位 watcher（initialLocation）
-  const latestTrackPt = store.trackPoints[store.trackPoints.length - 1] ?? null;
-  const displayLocation = store.status !== 'ready' && latestTrackPt ? latestTrackPt : initialLocation;
+  // 骑行中：用 liveLocation（原始 GPS，无平滑滞后）驱动地图用户点，轨迹线仍用平滑后的 trackPoints
+  // 非骑行：用 initialLocation（独立 watcher 采集的实时位置）
+  const displayLocation = store.status !== 'ready'
+    ? (liveLocation ?? initialLocation)
+    : initialLocation;
   // 骑行中地图跟轨迹（updateTrack 负责 setCenter），非骑行时地图跟用户位置
   const followUser = store.status === 'ready';
 
