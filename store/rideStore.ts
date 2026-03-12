@@ -104,7 +104,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     set({ status: RIDE_STATUS.RIDING, pauseStartTime: null, totalPausedMs: totalPausedMs + extra });
   },
 
-  finishRide: () => set({ status: RIDE_STATUS.READY, rideId: null }),
+  finishRide: () => set({ status: RIDE_STATUS.READY, rideId: null, trackPoints: [], pendingPoints: [] }),
 
   addPoint: (point) => {
     const { trackPoints, maxSpeedKmh, pendingPoints, elevationGainM, lastAltitudeM } = get();
@@ -112,7 +112,7 @@ export const useRideStore = create<RideState>((set, get) => ({
     const extra = last ? calcDistance(last, point) : 0;
     const speed = point.speed ?? 0;
 
-    // 爬升累计：中位数平滑后，上升超过 5m 才累加
+    // 爬升累计：中位数平滑后，单次上升 5-50m 才累加（>50m 视为 GPS 高度跳变，丢弃）
     let newElevationGain = elevationGainM;
     const rawAlt = point.altitude ?? null;
     let newLastAlt = lastAltitudeM;
@@ -120,9 +120,9 @@ export const useRideStore = create<RideState>((set, get) => ({
       const alt = smoothAltitude(rawAlt);
       if (lastAltitudeM != null) {
         const diff = alt - lastAltitudeM;
-        if (diff > 5) newElevationGain += diff;
+        if (diff > 5 && diff < 50) newElevationGain += diff;
       }
-      newLastAlt = rawAlt; // lastAltitudeM 存原始值，平滑只影响当前帧
+      newLastAlt = rawAlt;
     }
 
     set({

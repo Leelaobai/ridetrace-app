@@ -9,6 +9,8 @@ import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { Colors } from '../../constants/colors';
 import { GPS_ACCURACY_GOOD, GPS_ACCURACY_WEAK } from '../../constants/config';
+import { Linking } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import { useRideStore } from '../../store/rideStore';
 import { useAuthStore } from '../../store/authStore';
 import { rideService, isNetworkError } from '../../services/rideService';
@@ -477,8 +479,13 @@ export default function CockpitScreen() {
   const [gpsQuality, setGpsQuality] = useState<GpsQuality>('none');
   const [showVehiclePicker, setShowVehiclePicker] = useState(false);
   const { setVehicle } = useAuthStore();
+  // 记录前台 watcher 最后写入的 seq，轮询时用于跳过已入库的点
+  const lastFgSeqRef = useRef<number>(0);
   // onRawLocation：骑行中收到原始 GPS（已转 GCJ-02），直接更新地图用户点，无平滑滞后
-  const { startTracking, stopTracking } = useLocation((raw) => setLiveLocation(raw));
+  const { startTracking, stopTracking } = useLocation(
+    (raw) => setLiveLocation(raw),
+    (seq) => { lastFgSeqRef.current = Math.max(lastFgSeqRef.current, seq); },
+  );
 
   const handleVehicleSelect = async (v: MyVehicleDetail) => {
     setShowVehiclePicker(false);
@@ -579,25 +586,35 @@ export default function CockpitScreen() {
     return () => clearInterval(t);
   }, []);
 
+  // 骑行中每 3s 从 pointCache 同步后台采集的新点到 store
+  // 前台 watcher 存活时 lastFgSeqRef 持续更新，轮询不会重复入库；
+  // 前台 watcher 被系统杀死后，轮询接管，确保后台任务数据实时显示在地图上。
+  useEffect(() => {
+    if (store.status === 'ready') {
+      lastFgSeqRef.current = 0;
+      return;
+    }
+    const interval = setInterval(async () => {
+      const all = await pointCache.getAll();
+      const newPoints = all.filter(p => (p.seq ?? 0) > lastFgSeqRef.current);
+      if (newPoints.length === 0) return;
+      for (const p of newPoints) {
+        store.addPoint(p);
+      }
+      const last = newPoints[newPoints.length - 1];
+      lastFgSeqRef.current = last.seq ?? lastFgSeqRef.current;
+      setLiveLocation({ lat: last.lat, lng: last.lng });
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [store.status]);
+
   // 检测是否在 Expo Go 中运行（Expo Go 不支持后台位置任务）
   const isExpoGo = Constants.appOwnership === 'expo';
 
-  // 申请后台位置权限并启动后台任务（仅在独立 App / Dev Client 中运行）
+  // 启动后台位置任务（foregroundService 会在通知栏显示"RideTrace 骑行中"常驻条）
   const startBackgroundTracking = async () => {
     if (isExpoGo) return;
     try {
-      const { status: existing } = await Location.getBackgroundPermissionsAsync();
-      if (existing !== 'granted') {
-        await new Promise<void>((resolve) => {
-          Alert.alert(
-            '需要后台位置权限',
-            '为了在息屏骑行时持续记录轨迹，请在接下来的设置页面中选择"始终允许"。',
-            [{ text: '去设置', onPress: () => resolve() }],
-          );
-        });
-      }
-      const { status } = await Location.requestBackgroundPermissionsAsync();
-      if (status !== 'granted') return;
       const isRunning = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
       if (isRunning) return;
       await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
@@ -605,11 +622,14 @@ export default function CockpitScreen() {
         timeInterval: 3000,
         foregroundService: {
           notificationTitle: 'RideTrace 骑行中',
-          notificationBody: '正在记录您的骑行轨迹',
+          notificationBody: '正在记录您的骑行轨迹，切换 App 或熄屏后仍持续记录',
           notificationColor: '#0de3f2',
         },
       });
-    } catch {}
+    } catch (e) {
+      // 显示实际错误，便于排查（后续确认原因后可改回静默）
+      Alert.alert('后台定位启动失败', String(e));
+    }
   };
 
   const stopBackgroundTracking = async () => {
@@ -625,6 +645,29 @@ export default function CockpitScreen() {
       Alert.alert('未选择座驾', '请先选择一个座驾');
       return;
     }
+
+    // Android 13+ 需要通知权限才能显示前台服务常驻通知条
+    if (Platform.OS === 'android' && (Platform.Version as number) >= 33) {
+      await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+    }
+
+    // 申请后台位置权限，用于通知栏常驻 + 熄屏/切换 App 时持续记录
+    if (!isExpoGo) {
+      const { status: bgStatus } = await Location.requestBackgroundPermissionsAsync();
+      if (bgStatus !== 'granted') {
+        await new Promise<void>(resolve => {
+          Alert.alert(
+            '开启后台定位',
+            '将位置权限改为"始终允许"后，骑行时通知栏会显示骑行状态，熄屏或切换 App 也能持续记录轨迹。',
+            [
+              { text: '暂跳过', onPress: () => resolve() },
+              { text: '去设置', onPress: () => { Linking.openSettings(); resolve(); } },
+            ],
+          );
+        });
+      }
+    }
+
     const lat = initialLocation?.lat ?? 31.2304;
     const lng = initialLocation?.lng ?? 121.4737;
     // 清除上次骑行残留的 pointCache（防止旧点混入）

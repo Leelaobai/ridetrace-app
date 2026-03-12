@@ -32,7 +32,10 @@
         "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
         "FOREGROUND_SERVICE",
-        "FOREGROUND_SERVICE_LOCATION"
+        "FOREGROUND_SERVICE_LOCATION",
+        "POST_NOTIFICATIONS",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "web": {
@@ -44,12 +47,26 @@
       "expo-font",
       "expo-dev-client",
       [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      [
         "expo-location",
         {
           "locationAlwaysAndWhenInUsePermission": "RideTrace 需要后台位置权限以在骑行时持续记录轨迹",
           "locationWhenInUsePermission": "RideTrace 需要您的位置来记录骑行轨迹"
         }
       ]
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "de95bfb3-fe7b-4f7e-a8d4-f1e84ff60336"
+      }
+    }
   }
 }

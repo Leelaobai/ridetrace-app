@@ -1,7 +1,5 @@
-// 后端在 Docker：真机必须用「运行 Metro 的电脑」的局域网 IP（与 Expo 启动时 url 里 IP 一致）
-// 本机当前 IP：192.168.1.6；模拟器可设 EXPO_PUBLIC_API_URL=http://localhost:8080/api/v1
 export const API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.6:8080/api/v1';
+  process.env.EXPO_PUBLIC_API_URL || 'http://ride-trace-api.tadpolesai.com.cn/api/v1';
 
 // 高德地图 Web JS API Key（Web端 JS API）
 export const AMAP_KEY = process.env.EXPO_PUBLIC_AMAP_KEY || '8ee27259445c8820ca35a998f37a4eed';

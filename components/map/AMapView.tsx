@@ -44,6 +44,30 @@ function buildMapHTML(amapKey: string, securityCode: string) {
     window._polyline = null;
     window._userMarker = null;
     window._map = null;
+    window._trackTipAdded = false;
+    window._rawPoints = [];
+
+    // Catmull-Rom 曲线插值：在相邻 GPS 点之间生成平滑曲线，仅用于显示
+    function buildSmoothPath(pts) {
+      if (pts.length < 2) {
+        return pts.map(function(p) { return new AMap.LngLat(p.lng, p.lat); });
+      }
+      var STEPS = 4;
+      var path = [new AMap.LngLat(pts[0].lng, pts[0].lat)];
+      for (var i = 0; i < pts.length - 1; i++) {
+        var p0 = pts[Math.max(0, i - 1)];
+        var p1 = pts[i];
+        var p2 = pts[i + 1];
+        var p3 = pts[Math.min(pts.length - 1, i + 2)];
+        for (var s = 1; s <= STEPS; s++) {
+          var t = s / STEPS, t2 = t * t, t3 = t2 * t;
+          var lat = 0.5 * ((2*p1.lat) + (-p0.lat+p2.lat)*t + (2*p0.lat-5*p1.lat+4*p2.lat-p3.lat)*t2 + (-p0.lat+3*p1.lat-3*p2.lat+p3.lat)*t3);
+          var lng = 0.5 * ((2*p1.lng) + (-p0.lng+p2.lng)*t + (2*p0.lng-5*p1.lng+4*p2.lng-p3.lng)*t2 + (-p0.lng+3*p1.lng-3*p2.lng+p3.lng)*t3);
+          path.push(new AMap.LngLat(lng, lat));
+        }
+      }
+      return path;
+    }
 
     function initMap() {
       window._map = new AMap.Map('map', {
@@ -72,21 +96,17 @@ function buildMapHTML(amapKey: string, securityCode: string) {
       }
       if (points.length < 2) return;
 
+      window._rawPoints = points;
+      window._trackTipAdded = false;
+
+      var smoothPath = buildSmoothPath(points);
       var last = new AMap.LngLat(points[points.length - 1].lng, points[points.length - 1].lat);
 
       if (window._polyline) {
-        // 增量追加：直接把新点加到已有路径上，避免整体重绘
-        var path = window._polyline.getPath();
-        var newPoint = new AMap.LngLat(points[points.length - 1].lng, points[points.length - 1].lat);
-        path.push(newPoint);
-        window._polyline.setPath(path);
+        window._polyline.setPath(smoothPath);
       } else {
-        // 首次建线
-        var coords = points.map(function(p) {
-          return new AMap.LngLat(p.lng, p.lat);
-        });
         window._polyline = new AMap.Polyline({
-          path: coords,
+          path: smoothPath,
           strokeColor: '#0de3f2',
           strokeWeight: 5,
           strokeOpacity: 0.9,
@@ -97,7 +117,6 @@ function buildMapHTML(amapKey: string, securityCode: string) {
         window._map.add(window._polyline);
       }
 
-      // 跟随最新点
       window._map.setCenter(last);
     }
 
@@ -106,6 +125,21 @@ function buildMapHTML(amapKey: string, securityCode: string) {
         window._map && window._map.remove(window._polyline);
         window._polyline = null;
       }
+      window._trackTipAdded = false;
+    }
+
+    // 将轨迹的最后一个点实时更新为当前位置，让轨迹始终连到用户点
+    function extendTrackTip(lat, lng) {
+      if (!window._polyline || !window._amapLoaded) return;
+      var path = window._polyline.getPath();
+      var tip = new AMap.LngLat(lng, lat);
+      if (window._trackTipAdded) {
+        path[path.length - 1] = tip;
+      } else {
+        path.push(tip);
+        window._trackTipAdded = true;
+      }
+      window._polyline.setPath(path);
     }
 
     function setUserLocation(lat, lng, panToUser) {
@@ -147,6 +181,8 @@ function buildMapHTML(amapKey: string, securityCode: string) {
           updateTrack(msg.points);
         } else if (msg.type === 'RESET_TRACK') {
           resetTrack();
+        } else if (msg.type === 'EXTEND_TRACK_TIP') {
+          extendTrackTip(msg.lat, msg.lng);
         } else if (msg.type === 'SET_CENTER') {
           if (window._amapLoaded && window._map) {
             window._map.setCenter(new AMap.LngLat(msg.lng, msg.lat));
@@ -203,6 +239,8 @@ export function AMapView({ trackPoints, followUser = true, locatePoint, userLoca
       return;
     }
     postMsg(msg);
+    // 将轨迹终点实时拉到当前位置，确保轨迹线始终与用户点相连
+    postMsg({ type: 'EXTEND_TRACK_TIP', lat: userLocation.lat, lng: userLocation.lng });
   }, [userLocation, followUser]);
 
   return (

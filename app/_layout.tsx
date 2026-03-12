@@ -26,7 +26,7 @@ TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }: any) =>
   if (error) return;
   const { locations } = data as { locations: Location.LocationObject[] };
   for (const location of locations) {
-    if (location.coords.accuracy && location.coords.accuracy > 20) continue;
+    if (location.coords.accuracy && location.coords.accuracy > 300) continue;
     const { lat, lng } = wgs84ToGcj02(location.coords.latitude, location.coords.longitude);
     await pointCache.append({
       lat,
