@@ -3,6 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
 } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
 import { rideService } from '../../services/rideService';
@@ -17,16 +18,30 @@ interface RideDetail {
   duration_sec: number;
   avg_speed_kmh: number;
   max_speed_kmh: number;
-  elevation_gain: number;
   vehicle_nickname?: string;
   started_at: string;
   finished_at?: string;
-  points: { lat: number; lng: number }[];
+  points: { lat: number; lng: number; altitude?: number }[];
+}
+
+function calcElevationGain(points: { altitude?: number }[]): number {
+  let gain = 0;
+  let lastAlt: number | null = null;
+  for (const p of points) {
+    if (p.altitude != null && p.altitude > 0) {
+      if (lastAlt != null && p.altitude - lastAlt > 1) {
+        gain += p.altitude - lastAlt;
+      }
+      lastAlt = p.altitude;
+    }
+  }
+  return gain;
 }
 
 export default function RideDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
+  const { top } = useSafeAreaInsets();
   const [ride, setRide] = useState<RideDetail | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -54,12 +69,14 @@ export default function RideDetailScreen() {
     );
   }
 
+  const elevationGainM = calcElevationGain(ride.points);
+
   const statsItems = [
     { label: '总距离', value: formatDistance(ride.distance_m) },
     { label: '总时长', value: formatDuration(ride.duration_sec) },
     { label: '均速', value: formatSpeed(ride.avg_speed_kmh) },
     { label: '最大速度', value: formatSpeed(ride.max_speed_kmh) },
-    { label: '爬升', value: `${Math.round(ride.elevation_gain)} m` },
+    { label: '爬升', value: `${Math.round(elevationGainM)} m` },
     { label: '状态', value: '已完成' },
   ];
 
@@ -70,7 +87,7 @@ export default function RideDetailScreen() {
         <StaticTrackMap trackPoints={ride.points} style={styles.map} />
 
         {/* 返回按钮悬浮在地图上 */}
-        <TouchableOpacity style={styles.backBtn} onPress={() => router.back()}>
+        <TouchableOpacity style={[styles.backBtn, { top: top + 12 }]} onPress={() => router.back()}>
           <Ionicons name="chevron-back" size={22} color={Colors.textPrimary} />
         </TouchableOpacity>
       </View>
@@ -97,6 +114,15 @@ export default function RideDetailScreen() {
         {/* 统计数据格 */}
         <StatsGrid items={statsItems} />
 
+        {/* 生成路书 */}
+        <TouchableOpacity
+          style={styles.generateRouteBtn}
+          onPress={() => router.push(`/route/create?rideId=${id}`)}
+        >
+          <Ionicons name="map-outline" size={18} color={Colors.primary} />
+          <Text style={styles.generateRouteBtnText}>生成路书</Text>
+        </TouchableOpacity>
+
         {/* 按钮区 */}
         <TouchableOpacity
           style={styles.homeBtn}
@@ -117,7 +143,7 @@ const styles = StyleSheet.create({
   map: { flex: 1 },
   backBtn: {
     position: 'absolute',
-    top: 52,
+    top: 0,
     left: 16,
     width: 40,
     height: 40,
@@ -148,6 +174,12 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
   },
   vehicleText: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 12, color: Colors.primary },
+  generateRouteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    borderWidth: 1, borderColor: Colors.primary + '55', borderRadius: 12, paddingVertical: 14,
+    backgroundColor: Colors.primary + '11',
+  },
+  generateRouteBtnText: { fontFamily: 'SpaceGrotesk_600SemiBold', fontSize: 15, color: Colors.primary },
   homeBtn: {
     flexDirection: 'row',
     alignItems: 'center',

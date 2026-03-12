@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, Alert,
+  Modal, FlatList, ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,7 +11,9 @@ import { Colors } from '../../constants/colors';
 import { GPS_ACCURACY_GOOD, GPS_ACCURACY_WEAK } from '../../constants/config';
 import { useRideStore } from '../../store/rideStore';
 import { useAuthStore } from '../../store/authStore';
-import { rideService } from '../../services/rideService';
+import { rideService, isNetworkError } from '../../services/rideService';
+import { getMyVehicleList, activateVehicle, type MyVehicleDetail } from '../../services/vehicleService';
+import { offlineRidePlugin } from '../../utils/offlineRide';
 import { getErrorMessage } from '../../utils/errors';
 import { AMapView } from '../../components/map/AMapView';
 import { useLocation } from '../../hooks/useLocation';
@@ -33,42 +36,6 @@ function formatDistance(m: number) {
 }
 
 
-// ─── 状态指示器（左上角）────────────────────────────────
-function StatusBadge({ status, durationSec }: { status: 'riding' | 'paused'; durationSec: number }) {
-  const isRiding = status === 'riding';
-  return (
-    <View style={badgeStyles.wrap}>
-      <View style={[badgeStyles.dot, { backgroundColor: isRiding ? Colors.success : Colors.warning }]} />
-      <Text style={badgeStyles.text}>
-        {isRiding ? formatDuration(durationSec) : '已暂停'}
-      </Text>
-    </View>
-  );
-}
-
-const badgeStyles = StyleSheet.create({
-  wrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(8,17,18,0.85)',
-    borderWidth: 1,
-    borderColor: Colors.glassBorder,
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-  },
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  text: {
-    fontFamily: 'JetBrainsMono_400Regular',
-    fontSize: 14,
-    color: Colors.textPrimary,
-  },
-});
 
 // ─── 右侧地图控制按钮 ─────────────────────────────────
 function MapControls({ onLocate }: { onLocate: () => void }) {
@@ -101,23 +68,110 @@ const ctrlStyles = StyleSheet.create({
   },
 });
 
+// ─── 未登录引导面板 ──────────────────────────────────
+function UnauthedPanel({ onLogin }: { onLogin: () => void }) {
+  return (
+    <View style={unauthStyles.wrap}>
+      <View style={unauthStyles.headerRow}>
+        <View>
+          <Text style={unauthStyles.title}>RideTrace 驾驶舱</Text>
+          <Text style={unauthStyles.subtitle}>记录每一段精彩骑行</Text>
+        </View>
+      </View>
+      <View style={unauthStyles.divider} />
+      <View style={unauthStyles.featuresRow}>
+        <View style={unauthStyles.featureItem}>
+          <Ionicons name="navigate" size={16} color={Colors.primary} />
+          <Text style={unauthStyles.featureText}>实时轨迹记录</Text>
+        </View>
+        <View style={unauthStyles.featureItem}>
+          <Ionicons name="stats-chart" size={16} color={Colors.primary} />
+          <Text style={unauthStyles.featureText}>骑行数据分析</Text>
+        </View>
+      </View>
+      <TouchableOpacity style={unauthStyles.loginBtn} onPress={onLogin} activeOpacity={0.85}>
+        <Ionicons name="person" size={20} color="#000" />
+        <Text style={unauthStyles.loginBtnText}>登录后开始骑行</Text>
+      </TouchableOpacity>
+      <Text style={unauthStyles.hint}>登录即可解锁完整骑行功能</Text>
+    </View>
+  );
+}
+
+const unauthStyles = StyleSheet.create({
+  wrap: {
+    backgroundColor: 'rgba(8,17,18,0.95)',
+    borderTopWidth: 1,
+    borderColor: `rgba(13,227,242,0.15)`,
+    padding: 24,
+    gap: 14,
+  },
+  headerRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  title: { fontFamily: 'SpaceGrotesk_600SemiBold', fontSize: 17, color: Colors.textPrimary },
+  subtitle: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 13, color: Colors.textSecondary, marginTop: 3 },
+  divider: { height: 1, backgroundColor: `rgba(13,227,242,0.1)` },
+  featuresRow: { flexDirection: 'row', gap: 24 },
+  featureItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  featureText: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 13, color: Colors.textSecondary },
+  loginBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: Colors.primary, borderRadius: 14, height: 56, gap: 10,
+    shadowColor: Colors.primary, shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.5, shadowRadius: 14, elevation: 8,
+  },
+  loginBtnText: { fontFamily: 'SpaceGrotesk_600SemiBold', fontSize: 18, color: '#000' },
+  hint: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 12, color: Colors.textMuted, textAlign: 'center' },
+});
+
+// ─── 无座驾引导面板 ──────────────────────────────────
+function NoVehiclePanel({ onAdd }: { onAdd: () => void }) {
+  return (
+    <View style={unauthStyles.wrap}>
+      <View style={unauthStyles.headerRow}>
+        <View>
+          <Text style={unauthStyles.title}>还没有座驾</Text>
+          <Text style={unauthStyles.subtitle}>选择一辆座驾，开始记录你的骑行</Text>
+        </View>
+      </View>
+      <View style={unauthStyles.divider} />
+      <View style={unauthStyles.featuresRow}>
+        <View style={unauthStyles.featureItem}>
+          <Ionicons name="bicycle" size={16} color={Colors.primary} />
+          <Text style={unauthStyles.featureText}>支持多种车型</Text>
+        </View>
+        <View style={unauthStyles.featureItem}>
+          <Ionicons name="swap-horizontal" size={16} color={Colors.primary} />
+          <Text style={unauthStyles.featureText}>随时切换座驾</Text>
+        </View>
+      </View>
+      <TouchableOpacity style={unauthStyles.loginBtn} onPress={onAdd} activeOpacity={0.85}>
+        <Ionicons name="bicycle" size={20} color="#000" />
+        <Text style={unauthStyles.loginBtnText}>去添加座驾</Text>
+      </TouchableOpacity>
+      <Text style={unauthStyles.hint}>在"管理座驾"中添加第一辆车，再回来开始骑行</Text>
+    </View>
+  );
+}
+
 // ─── 状态A：准备起骑 底部面板 ─────────────────────────
-function ReadyPanel({ onStart, vehicleName, totalDistanceM }: {
+function ReadyPanel({ onStart, vehicleName, totalDistanceM, onSwitch }: {
   onStart: () => void;
   vehicleName: string;
   totalDistanceM: number;
+  onSwitch: () => void;
 }) {
   const distKm = (totalDistanceM / 1000).toFixed(0);
   return (
     <View style={panelStyles.wrap}>
       <View style={panelStyles.vehicleRow}>
-        <View>
+        <View style={{ flex: 1 }}>
           <Text style={panelStyles.vehicleName}>{vehicleName}</Text>
           <Text style={panelStyles.vehicleMeta}>总里程 {distKm} km · 准备就绪</Text>
         </View>
-        <View style={panelStyles.readyBadge}>
-          <Text style={panelStyles.readyBadgeText}>系统已激活</Text>
-        </View>
+        <TouchableOpacity style={panelStyles.switchBtn} onPress={onSwitch}>
+          <Ionicons name="swap-horizontal" size={14} color={Colors.primary} />
+          <Text style={panelStyles.switchBtnText}>切换</Text>
+        </TouchableOpacity>
       </View>
       <TouchableOpacity style={panelStyles.startBtn} onPress={onStart} activeOpacity={0.85}>
         <Ionicons name="play" size={22} color="#000" />
@@ -127,11 +181,127 @@ function ReadyPanel({ onStart, vehicleName, totalDistanceM }: {
   );
 }
 
+// ─── 座驾选择 Modal ───────────────────────────────────
+function VehiclePickerModal({ visible, onClose, onSelect }: {
+  visible: boolean;
+  onClose: () => void;
+  onSelect: (v: MyVehicleDetail) => void;
+}) {
+  const [vehicles, setVehicles] = useState<MyVehicleDetail[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+    setLoading(true);
+    getMyVehicleList().then(setVehicles).finally(() => setLoading(false));
+  }, [visible]);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <TouchableOpacity style={pickerStyles.backdrop} activeOpacity={1} onPress={onClose} />
+      <View style={pickerStyles.sheet}>
+        <View style={pickerStyles.handle} />
+        <Text style={pickerStyles.title}>选择座驾</Text>
+        {loading ? (
+          <ActivityIndicator color={Colors.primary} style={{ marginVertical: 32 }} />
+        ) : vehicles.length === 0 ? (
+          <Text style={pickerStyles.empty}>暂无座驾，请先去"我的 → 管理座驾"添加</Text>
+        ) : (
+          <FlatList
+            data={vehicles}
+            keyExtractor={v => v.id}
+            style={{ maxHeight: 320 }}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={[pickerStyles.item, item.is_active && pickerStyles.itemActive]}
+                onPress={() => onSelect(item)}
+                activeOpacity={0.75}
+              >
+                <Text style={pickerStyles.itemIcon}>{item.model.icon}</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={pickerStyles.itemName}>{item.nickname}</Text>
+                  <Text style={pickerStyles.itemModel}>{item.model.name}</Text>
+                </View>
+                {item.is_active && (
+                  <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />
+                )}
+              </TouchableOpacity>
+            )}
+          />
+        )}
+      </View>
+    </Modal>
+  );
+}
+
+const pickerStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  sheet: {
+    backgroundColor: '#0f1f20',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    borderTopWidth: 1,
+    borderColor: Colors.glassBorder,
+    padding: 20,
+    paddingBottom: 40,
+  },
+  handle: {
+    width: 36,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: Colors.glassBorder,
+    alignSelf: 'center',
+    marginBottom: 16,
+  },
+  title: {
+    fontFamily: 'SpaceGrotesk_600SemiBold',
+    fontSize: 17,
+    color: Colors.textPrimary,
+    marginBottom: 16,
+  },
+  empty: {
+    fontFamily: 'SpaceGrotesk_400Regular',
+    fontSize: 14,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    marginVertical: 32,
+  },
+  item: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 4,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.glassBorder,
+  },
+  itemActive: {
+    backgroundColor: 'rgba(13,227,242,0.05)',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+  },
+  itemIcon: { fontSize: 24 },
+  itemName: {
+    fontFamily: 'SpaceGrotesk_600SemiBold',
+    fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  itemModel: {
+    fontFamily: 'SpaceGrotesk_400Regular',
+    fontSize: 12,
+    color: Colors.textSecondary,
+    marginTop: 2,
+  },
+});
+
 // ─── 数据面板（骑行中 & 暂停共用）────────────────────
 function StatsPanel({
-  speedKmh, avgSpeedKmh, durationSec, distanceM,
+  speedKmh, avgSpeedKmh, durationSec, distanceM, elevationGainM,
 }: {
-  speedKmh: number; avgSpeedKmh: number; durationSec: number; distanceM: number;
+  speedKmh: number; avgSpeedKmh: number; durationSec: number; distanceM: number; elevationGainM: number;
 }) {
   return (
     <View style={statsStyles.wrap}>
@@ -158,6 +328,11 @@ function StatsPanel({
         <View style={statsStyles.subItem}>
           <Text style={statsStyles.subValue}>{formatDistance(distanceM)}</Text>
           <Text style={statsStyles.subLabel}>距离</Text>
+        </View>
+        <View style={statsStyles.divider} />
+        <View style={statsStyles.subItem}>
+          <Text style={statsStyles.subValue}>{elevationGainM.toFixed(0)}</Text>
+          <Text style={statsStyles.subLabel}>爬升 M</Text>
         </View>
       </View>
     </View>
@@ -253,11 +428,12 @@ const panelStyles = StyleSheet.create({
   vehicleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   vehicleName: { fontFamily: 'SpaceGrotesk_600SemiBold', fontSize: 17, color: Colors.textPrimary },
   vehicleMeta: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 13, color: Colors.textSecondary, marginTop: 3 },
-  readyBadge: {
-    borderWidth: 1, borderColor: Colors.primary, borderRadius: 8,
-    paddingHorizontal: 10, paddingVertical: 4,
+  switchBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    borderWidth: 1, borderColor: Colors.primary + '88', borderRadius: 8,
+    paddingHorizontal: 10, paddingVertical: 5,
   },
-  readyBadgeText: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 12, color: Colors.primary },
+  switchBtnText: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 12, color: Colors.primary },
   startBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     backgroundColor: Colors.primary, borderRadius: 14, height: 56, gap: 10,
@@ -291,30 +467,61 @@ const GPS_COLOR: Record<GpsQuality, string> = {
 export default function CockpitScreen() {
   const router = useRouter();
   const store = useRideStore();
-  const { vehicleId, vehicleNickname, vehicleTotalDistanceM } = useAuthStore();
+  const { token, vehicleId, vehicleNickname, vehicleTotalDistanceM } = useAuthStore();
+  const isAuthed = !!token;
   const [tick, setTick] = useState(0);
   const [avgSpeed, setAvgSpeed] = useState(0);
   const [locatePoint, setLocatePoint] = useState<{ lat: number; lng: number; ts: number } | null>(null);
   const [initialLocation, setInitialLocation] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsQuality, setGpsQuality] = useState<GpsQuality>('none');
+  const [showVehiclePicker, setShowVehiclePicker] = useState(false);
+  const { setVehicle } = useAuthStore();
   const { startTracking, stopTracking } = useLocation();
 
+  const handleVehicleSelect = async (v: MyVehicleDetail) => {
+    setShowVehiclePicker(false);
+    try {
+      const updated = await activateVehicle(v.id);
+      setVehicle(updated.id, updated.nickname, updated.total_distance_m);
+    } catch (e) {
+      Alert.alert('切换失败', getErrorMessage(e, '请稍后重试'));
+    }
+  };
+
   const handleLocate = async () => {
+    console.log('[Locate] ── 按下定位按钮 ──────────────────');
+    console.log('[Locate] gpsQuality:', gpsQuality);
+    console.log('[Locate] initialLocation:', initialLocation
+      ? `${initialLocation.lat.toFixed(6)}, ${initialLocation.lng.toFixed(6)}`
+      : 'null');
+    console.log('[Locate] trackPoints count:', store.trackPoints.length);
+
     const last = store.trackPoints[store.trackPoints.length - 1];
     if (last) {
+      console.log('[Locate] → 使用 trackPoints 最新点:', `${last.lat.toFixed(6)}, ${last.lng.toFixed(6)}`);
       setLocatePoint({ lat: last.lat, lng: last.lng, ts: Date.now() });
       return;
     }
     if (initialLocation) {
+      console.log('[Locate] → 使用 initialLocation（watcher）');
       setLocatePoint({ ...initialLocation, ts: Date.now() });
       return;
     }
+    console.log('[Locate] → initialLocation 为空，调用 getCurrentPositionAsync...');
     try {
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      console.log('[Locate] getCurrentPositionAsync 返回:',
+        `lat=${loc.coords.latitude.toFixed(6)}`,
+        `lng=${loc.coords.longitude.toFixed(6)}`,
+        `accuracy=${loc.coords.accuracy?.toFixed(1)}m`,
+        `age=${((Date.now() - loc.timestamp) / 1000).toFixed(1)}s`,
+      );
       const point = wgs84ToGcj02(loc.coords.latitude, loc.coords.longitude);
       setInitialLocation(point);
       setLocatePoint({ ...point, ts: Date.now() });
-    } catch {}
+    } catch (e) {
+      console.warn('[Locate] getCurrentPositionAsync 失败:', e);
+    }
   };
 
   useEffect(() => {
@@ -324,31 +531,33 @@ export default function CockpitScreen() {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
 
+        // 缓存位置：2 分钟内直接用，给用户一个初始位置，watcher 启动后自动更新
         const cached = await Location.getLastKnownPositionAsync();
         if (cached) {
-          setInitialLocation(wgs84ToGcj02(cached.coords.latitude, cached.coords.longitude));
-          setGpsQuality(gpsQualityFromAccuracy(cached.coords.accuracy));
+          const ageMs = Date.now() - cached.timestamp;
+          if (ageMs < 120_000) {
+            setInitialLocation(wgs84ToGcj02(cached.coords.latitude, cached.coords.longitude));
+            setGpsQuality(gpsQualityFromAccuracy(cached.coords.accuracy));
+          }
         }
 
-        const fast = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        setInitialLocation(wgs84ToGcj02(fast.coords.latitude, fast.coords.longitude));
-        setGpsQuality(gpsQualityFromAccuracy(fast.coords.accuracy));
-
+        // watchPositionAsync 直接启动高精度持续定位，第一个回调即为当前位置
+        console.log('[GPS] 启动 watchPositionAsync (BestForNavigation, 1s/2m)');
         sub = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, timeInterval: 3000, distanceInterval: 5 },
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            timeInterval: 1000,
+            distanceInterval: 0,
+          },
           (pos) => {
-            setInitialLocation(wgs84ToGcj02(pos.coords.latitude, pos.coords.longitude));
-            setGpsQuality(gpsQualityFromAccuracy(pos.coords.accuracy));
+            const { latitude, longitude, accuracy, altitude, speed } = pos.coords;
+            console.log(`[GPS] watcher: lat=${latitude.toFixed(6)} lng=${longitude.toFixed(6)} acc=${accuracy?.toFixed(1)}m alt=${altitude?.toFixed(1)}m spd=${((speed ?? 0) * 3.6).toFixed(1)}km/h`);
+            setInitialLocation(wgs84ToGcj02(latitude, longitude));
+            setGpsQuality(gpsQualityFromAccuracy(accuracy));
           },
         );
-      } catch {
-        try {
-          const last = await Location.getLastKnownPositionAsync();
-          if (last) {
-            setInitialLocation(wgs84ToGcj02(last.coords.latitude, last.coords.longitude));
-            setGpsQuality(gpsQualityFromAccuracy(last.coords.accuracy));
-          }
-        } catch {}
+      } catch (e) {
+        console.warn('[GPS] watchPositionAsync 启动失败:', e);
       }
     })();
     return () => { sub?.remove(); };
@@ -358,9 +567,11 @@ export default function CockpitScreen() {
   useEffect(() => {
     const t = setInterval(() => {
       setTick(v => v + 1);
-      const sec = store.ridingDurationSec();
-      if (sec > 0 && store.distanceM > 0) {
-        setAvgSpeed((store.distanceM / 1000) / (sec / 3600));
+      // 用 getState() 读最新值，避免闭包捕获旧 store 导致均速永远为 0
+      const { distanceM, ridingDurationSec } = useRideStore.getState();
+      const sec = ridingDurationSec();
+      if (sec > 0 && distanceM > 0) {
+        setAvgSpeed((distanceM / 1000) / (sec / 3600));
       }
     }, 1000);
     return () => clearInterval(t);
@@ -373,6 +584,16 @@ export default function CockpitScreen() {
   const startBackgroundTracking = async () => {
     if (isExpoGo) return;
     try {
+      const { status: existing } = await Location.getBackgroundPermissionsAsync();
+      if (existing !== 'granted') {
+        await new Promise<void>((resolve) => {
+          Alert.alert(
+            '需要后台位置权限',
+            '为了在息屏骑行时持续记录轨迹，请在接下来的设置页面中选择"始终允许"。',
+            [{ text: '去设置', onPress: () => resolve() }],
+          );
+        });
+      }
       const { status } = await Location.requestBackgroundPermissionsAsync();
       if (status !== 'granted') return;
       const isRunning = await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
@@ -404,13 +625,24 @@ export default function CockpitScreen() {
     }
     const lat = initialLocation?.lat ?? 31.2304;
     const lng = initialLocation?.lng ?? 121.4737;
+    // 清除上次骑行残留的 pointCache（防止旧点混入）
+    await pointCache.clear();
     try {
       const res = await rideService.startRide(vehicleId, lat, lng);
-      store.startRide(res.id, vehicleId);
+      store.startRide(res.id, vehicleId, false);
       await startTracking();
       await startBackgroundTracking();
     } catch (e) {
-      Alert.alert('开始失败', getErrorMessage(e, '请检查网络连接'));
+      // 网络错误且插件启用 → 进入离线模式
+      if (offlineRidePlugin.isEnabled && isNetworkError(e)) {
+        const localId = Math.random().toString(36).slice(2) + Date.now().toString(36);
+        store.startRide(localId, vehicleId, true);
+        await startTracking();
+        await startBackgroundTracking(); // 后台任务只写 pointCache，不调 API，离线模式同样需要
+        Alert.alert('已进入离线模式', '网络不可用，骑行数据将保存在本地，回家后自动同步。');
+      } else {
+        Alert.alert('开始失败', getErrorMessage(e, '请检查网络连接'));
+      }
     }
   };
 
@@ -432,15 +664,56 @@ export default function CockpitScreen() {
       {
         text: '结束', style: 'destructive', onPress: async () => {
           stopTracking();
-          await stopBackgroundTracking();
           const rideId = store.rideId;
           if (!rideId) return;
-          // 强制上传所有缓存点
-          await store.flushPoints();
-          await pointCache.clear();
-          await rideService.finishRide(rideId);
-          store.finishRide();
-          router.push(`/ride/${rideId}`);
+
+          if (store.isOffline) {
+            // ── 离线结束：保存到本地，等待同步 ──
+            // pointCache 包含前台 + 后台所有轨迹点（含息屏期间后台采集的点）
+            const allPoints = await pointCache.getAll();
+            const finishedAt = new Date();
+            const durationSec = store.ridingDurationSec();
+            await offlineRidePlugin.save({
+              localId: rideId,
+              vehicleId: store.vehicleId!,
+              startLat: initialLocation?.lat ?? 0,
+              startLng: initialLocation?.lng ?? 0,
+              startedAt: store.startTime?.toISOString() ?? new Date().toISOString(),
+              finishedAt: finishedAt.toISOString(),
+              durationSec,
+              distanceM: store.distanceM,
+              maxSpeedKmh: store.maxSpeedKmh,
+              points: allPoints.map(p => ({
+                lat: p.lat,
+                lng: p.lng,
+                speed: p.speed,
+                altitude: p.altitude,
+                accuracy: p.accuracy,
+                recorded_at: p.recorded_at,
+                seq: p.seq,
+              })),
+            });
+            await stopBackgroundTracking();
+            await pointCache.clear();
+            store.finishRide();
+            Alert.alert(
+              '骑行已保存',
+              `已离线保存 ${(store.distanceM / 1000).toFixed(2)} km 的骑行记录，连接网络后将自动同步。`,
+            );
+          } else {
+            // ── 在线结束：上传前台点 + 后台采集点，再结束 ──
+            await stopBackgroundTracking();
+            await store.flushPoints();           // 上传前台 pendingPoints
+            const bgPoints = await pointCache.getAll();
+            if (bgPoints.length > 0) {
+              // 后台任务采集的点（含息屏期间），服务端 ON CONFLICT DO NOTHING 去重
+              await rideService.batchUploadPoints(rideId, bgPoints);
+            }
+            await pointCache.clear();
+            await rideService.finishRide(rideId);
+            store.finishRide();
+            router.push(`/ride/${rideId}`);
+          }
         },
       },
     ]);
@@ -448,31 +721,29 @@ export default function CockpitScreen() {
 
   const durationSec = store.ridingDurationSec();
 
+  // 骑行中：用户点跟轨迹尖端（每次 addPoint 都会更新）
+  // 非骑行：用户点跟独立定位 watcher（initialLocation）
+  const latestTrackPt = store.trackPoints[store.trackPoints.length - 1] ?? null;
+  const displayLocation = store.status !== 'ready' && latestTrackPt ? latestTrackPt : initialLocation;
+  // 骑行中地图跟轨迹（updateTrack 负责 setCenter），非骑行时地图跟用户位置
+  const followUser = store.status === 'ready';
+
   return (
     <View style={styles.container}>
       {/* 高德地图层 */}
-      <AMapView trackPoints={store.trackPoints} locatePoint={locatePoint} userLocation={initialLocation} style={{ flex: 1 }} />
+      <AMapView trackPoints={store.trackPoints} locatePoint={locatePoint} userLocation={displayLocation} followUser={followUser} style={{ flex: 1 }} />
 
       {/* 悬浮 UI 层 */}
       <View style={styles.overlay} pointerEvents="box-none">
-        {/* 左上角状态 */}
-        {store.status !== 'ready' && (
-          <View style={styles.topLeft}>
-            <StatusBadge status={store.status} durationSec={durationSec} />
+        {/* 左上角：始终显示 GPS 信号强度 */}
+        <View style={styles.topLeft}>
+          <View style={styles.gpsBadge}>
+            <Ionicons name="locate" size={14} color={GPS_COLOR[gpsQuality]} />
+            <Text style={[styles.gpsText, { color: GPS_COLOR[gpsQuality] }]}>
+              {GPS_LABEL[gpsQuality]}
+            </Text>
           </View>
-        )}
-
-        {/* GPS 状态（准备状态显示） */}
-        {store.status === 'ready' && (
-          <View style={styles.topLeft}>
-            <View style={styles.gpsBadge}>
-              <Ionicons name="locate" size={14} color={GPS_COLOR[gpsQuality]} />
-              <Text style={[styles.gpsText, { color: GPS_COLOR[gpsQuality] }]}>
-                {GPS_LABEL[gpsQuality]}
-              </Text>
-            </View>
-          </View>
-        )}
+        </View>
 
         {/* 右侧地图控制 */}
         <View style={styles.rightControls}>
@@ -482,24 +753,38 @@ export default function CockpitScreen() {
 
       {/* 底部面板 */}
       <View style={styles.bottom}>
-        {store.status === 'ready' && (
+        {!isAuthed && (
+          <UnauthedPanel onLogin={() => router.push('/(tabs)/login')} />
+        )}
+        {isAuthed && !vehicleId && (
+          <NoVehiclePanel onAdd={() => router.push('/vehicle/manage')} />
+        )}
+        {isAuthed && !!vehicleId && store.status === 'ready' && (
           <ReadyPanel
             onStart={handleStart}
             vehicleName={vehicleNickname ?? '我的座驾'}
             totalDistanceM={vehicleTotalDistanceM}
+            onSwitch={() => setShowVehiclePicker(true)}
           />
         )}
-        {store.status !== 'ready' && (
+        {isAuthed && !!vehicleId && store.status !== 'ready' && (
           <StatsPanel
             speedKmh={store.currentSpeedKmh}
             avgSpeedKmh={avgSpeed}
             durationSec={durationSec}
             distanceM={store.distanceM}
+            elevationGainM={store.elevationGainM}
           />
         )}
-        {store.status === 'riding' && <RidingButtons onPause={handlePause} />}
-        {store.status === 'paused' && <PausedButtons onResume={handleResume} onFinish={handleFinishConfirm} />}
+        {isAuthed && !!vehicleId && store.status === 'riding' && <RidingButtons onPause={handlePause} />}
+        {isAuthed && !!vehicleId && store.status === 'paused' && <PausedButtons onResume={handleResume} onFinish={handleFinishConfirm} />}
       </View>
+
+      <VehiclePickerModal
+        visible={showVehiclePicker}
+        onClose={() => setShowVehiclePicker(false)}
+        onSelect={handleVehicleSelect}
+      />
     </View>
   );
 }

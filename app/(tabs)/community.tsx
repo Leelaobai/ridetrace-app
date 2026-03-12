@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/colors';
 import { communityService } from '../../services/communityService';
+import { getErrorMessage } from '../../utils/errors';
 
 type Post = {
   id: string; username: string; avatar: string; time: string;
@@ -34,17 +36,30 @@ function PostCard({ post }: { post: Post }) {
 }
 
 export default function CommunityScreen() {
+  const { top } = useSafeAreaInsets();
   const [posts, setPosts] = useState<Post[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<'recommend' | 'following'>('recommend');
 
   useEffect(() => {
-    communityService.getPosts().then(d => setPosts(d.posts));
+    setLoading(true);
+    setError(null);
+    communityService.getPosts()
+      .then(d => {
+        setPosts(d.posts ?? []);
+      })
+      .catch(e => {
+        setError(getErrorMessage(e, '加载动态失败，请重试'));
+        setPosts([]);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   return (
     <View style={styles.container}>
       {/* 标题栏 */}
-      <View style={styles.header}>
+      <View style={[styles.header, { paddingTop: top + 12 }]}>
         <Text style={styles.title}>社区</Text>
       </View>
 
@@ -64,6 +79,22 @@ export default function CommunityScreen() {
         data={posts}
         keyExtractor={i => i.id}
         contentContainerStyle={styles.list}
+        ListEmptyComponent={
+          loading ? (
+            <View style={styles.emptyWrap}>
+              <ActivityIndicator color={Colors.primary} size="small" />
+              <Text style={styles.emptyText}>加载中...</Text>
+            </View>
+          ) : error ? (
+            <View style={styles.emptyWrap}>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          ) : (
+            <View style={styles.emptyWrap}>
+              <Text style={styles.emptyText}>暂无动态</Text>
+            </View>
+          )
+        }
         renderItem={({ item }) => <PostCard post={item} />}
       />
     </View>
@@ -73,7 +104,7 @@ export default function CommunityScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.bg },
   header: {
-    paddingTop: 60, paddingBottom: 12, paddingHorizontal: 20,
+    paddingBottom: 12, paddingHorizontal: 20,
     borderBottomWidth: 1, borderBottomColor: Colors.glassBorder,
   },
   title: { fontFamily: 'SpaceGrotesk_600SemiBold', fontSize: 24, color: Colors.textPrimary },
@@ -89,6 +120,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary, borderRadius: 1,
   },
   list: { padding: 16, gap: 12 },
+  emptyWrap: { alignItems: 'center', paddingVertical: 48, gap: 8 },
+  emptyText: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 14, color: Colors.textMuted },
+  errorText: { fontFamily: 'SpaceGrotesk_400Regular', fontSize: 14, color: Colors.danger, textAlign: 'center' },
   card: {
     backgroundColor: Colors.glassBg, borderWidth: 1,
     borderColor: Colors.glassBorder, borderRadius: 12,

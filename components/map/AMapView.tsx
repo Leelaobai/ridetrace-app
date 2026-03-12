@@ -9,6 +9,7 @@
 
 import { useEffect, useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
+import type { WebView as WebViewType } from 'react-native-webview';
 import { WebView } from 'react-native-webview';
 import { AMAP_KEY, AMAP_SECURITY_CODE } from '../../constants/config';
 
@@ -52,16 +53,16 @@ function buildMapHTML(amapKey: string, securityCode: string) {
         showLabel: true,
       });
 
+      // 先标记已加载，再处理积压消息，避免 setUserLocation 内部再次进入 pending
       window._amapLoaded = true;
 
-      if (window._pendingTrack && window._pendingTrack.length > 0) {
-        updateTrack(window._pendingTrack);
-        window._pendingTrack = null;
-      }
-      if (window._pendingLocation) {
-        setUserLocation(window._pendingLocation.lat, window._pendingLocation.lng);
-        window._pendingLocation = null;
-      }
+      var pt = window._pendingTrack;
+      window._pendingTrack = null;
+      if (pt && pt.length > 0) updateTrack(pt);
+
+      var pl = window._pendingLocation;
+      window._pendingLocation = null;
+      if (pl) setUserLocation(pl.lat, pl.lng, pl.pan);
     }
 
     function updateTrack(points) {
@@ -71,35 +72,45 @@ function buildMapHTML(amapKey: string, securityCode: string) {
       }
       if (points.length < 2) return;
 
-      var coords = points.map(function(p) {
-        return new AMap.LngLat(p.lng, p.lat);
-      });
+      var last = new AMap.LngLat(points[points.length - 1].lng, points[points.length - 1].lat);
 
-      // 移除旧轨迹线
       if (window._polyline) {
-        window._map.remove(window._polyline);
+        // 增量追加：直接把新点加到已有路径上，避免整体重绘
+        var path = window._polyline.getPath();
+        var newPoint = new AMap.LngLat(points[points.length - 1].lng, points[points.length - 1].lat);
+        path.push(newPoint);
+        window._polyline.setPath(path);
+      } else {
+        // 首次建线
+        var coords = points.map(function(p) {
+          return new AMap.LngLat(p.lng, p.lat);
+        });
+        window._polyline = new AMap.Polyline({
+          path: coords,
+          strokeColor: '#0de3f2',
+          strokeWeight: 5,
+          strokeOpacity: 0.9,
+          lineJoin: 'round',
+          lineCap: 'round',
+          showDir: true,
+        });
+        window._map.add(window._polyline);
       }
 
-      // 绘制新轨迹线
-      window._polyline = new AMap.Polyline({
-        path: coords,
-        strokeColor: '#0de3f2',
-        strokeWeight: 5,
-        strokeOpacity: 0.9,
-        lineJoin: 'round',
-        lineCap: 'round',
-        showDir: true,
-      });
-      window._map.add(window._polyline);
-
       // 跟随最新点
-      var last = coords[coords.length - 1];
       window._map.setCenter(last);
     }
 
-    function setUserLocation(lat, lng) {
+    function resetTrack() {
+      if (window._polyline) {
+        window._map && window._map.remove(window._polyline);
+        window._polyline = null;
+      }
+    }
+
+    function setUserLocation(lat, lng, panToUser) {
       if (!window._amapLoaded || !window._map) {
-        window._pendingLocation = { lat: lat, lng: lng };
+        window._pendingLocation = { lat: lat, lng: lng, pan: panToUser };
         return;
       }
       var pos = new AMap.LngLat(lng, lat);
@@ -115,6 +126,8 @@ function buildMapHTML(amapKey: string, securityCode: string) {
           zIndex: 200,
         });
         window._map.add(window._userMarker);
+      }
+      if (panToUser) {
         window._map.setCenter(pos);
       }
     }
@@ -132,12 +145,14 @@ function buildMapHTML(amapKey: string, securityCode: string) {
         var msg = JSON.parse(data);
         if (msg.type === 'UPDATE_TRACK') {
           updateTrack(msg.points);
+        } else if (msg.type === 'RESET_TRACK') {
+          resetTrack();
         } else if (msg.type === 'SET_CENTER') {
           if (window._amapLoaded && window._map) {
             window._map.setCenter(new AMap.LngLat(msg.lng, msg.lat));
           }
         } else if (msg.type === 'SET_LOCATION') {
-          setUserLocation(msg.lat, msg.lng);
+          setUserLocation(msg.lat, msg.lng, msg.pan);
         }
       } catch(e) {}
     }
@@ -148,32 +163,47 @@ function buildMapHTML(amapKey: string, securityCode: string) {
 }
 
 export function AMapView({ trackPoints, followUser = true, locatePoint, userLocation, style }: Props) {
-  const webViewRef = useRef<WebView>(null);
+  const webViewRef = useRef<WebViewType>(null);
   const prevLenRef = useRef(0);
+  const isReadyRef = useRef(false);
+  const pendingLocationRef = useRef<{ lat: number; lng: number; pan: boolean } | null>(null);
+
+  const postMsg = (msg: object) => {
+    webViewRef.current?.postMessage(JSON.stringify(msg));
+  };
+
+  const handleLoadEnd = () => {
+    isReadyRef.current = true;
+    if (pendingLocationRef.current) {
+      const { lat, lng, pan } = pendingLocationRef.current;
+      postMsg({ type: 'SET_LOCATION', lat, lng, pan });
+      pendingLocationRef.current = null;
+    }
+  };
 
   useEffect(() => {
     if (trackPoints.length === prevLenRef.current) return;
     prevLenRef.current = trackPoints.length;
-
-    if (!webViewRef.current) return;
-    webViewRef.current.postMessage(
-      JSON.stringify({ type: 'UPDATE_TRACK', points: trackPoints })
-    );
+    if (!isReadyRef.current) return;
+    postMsg({ type: 'UPDATE_TRACK', points: trackPoints });
   }, [trackPoints]);
 
   useEffect(() => {
-    if (!locatePoint || !webViewRef.current) return;
-    webViewRef.current.postMessage(
-      JSON.stringify({ type: 'SET_CENTER', lat: locatePoint.lat, lng: locatePoint.lng })
-    );
+    if (!locatePoint) return;
+    if (!isReadyRef.current) return;
+    postMsg({ type: 'SET_CENTER', lat: locatePoint.lat, lng: locatePoint.lng });
   }, [locatePoint]);
 
+  // userLocation 变化时更新用户点位置；followUser=true 时地图跟随（pan）
   useEffect(() => {
-    if (!userLocation || !webViewRef.current) return;
-    webViewRef.current.postMessage(
-      JSON.stringify({ type: 'SET_LOCATION', lat: userLocation.lat, lng: userLocation.lng })
-    );
-  }, [userLocation]);
+    if (!userLocation) return;
+    const msg = { type: 'SET_LOCATION', lat: userLocation.lat, lng: userLocation.lng, pan: followUser };
+    if (!isReadyRef.current) {
+      pendingLocationRef.current = { lat: userLocation.lat, lng: userLocation.lng, pan: followUser || (pendingLocationRef.current?.pan ?? false) };
+      return;
+    }
+    postMsg(msg);
+  }, [userLocation, followUser]);
 
   return (
     <View style={[styles.container, style]}>
@@ -186,6 +216,7 @@ export function AMapView({ trackPoints, followUser = true, locatePoint, userLoca
         geolocationEnabled
         allowsInlineMediaPlayback
         originWhitelist={['*']}
+        onLoadEnd={handleLoadEnd}
         onError={() => {}}
       />
     </View>

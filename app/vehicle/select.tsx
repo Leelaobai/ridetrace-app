@@ -6,26 +6,20 @@ import {
   StyleSheet,
   FlatList,
   ActivityIndicator,
-  SafeAreaView,
   Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/colors';
+import { VEHICLE_CATEGORY_LABEL, VEHICLE_NICKNAME_PREFIX } from '../../constants/vehicle';
 import { useAuthStore } from '../../store/authStore';
 import { getVehicleModels, selectVehicle, getMyVehicle, type VehicleModel } from '../../services/vehicleService';
 import { getErrorMessage } from '../../utils/errors';
 
-const CATEGORY_LABEL: Record<string, string> = {
-  road: '公路车',
-  mountain: '山地车',
-  city: '城市车',
-  folding: '折叠车',
-  ebike: '电助力车',
-};
-
 export default function VehicleSelectScreen() {
   const router = useRouter();
+  const { top } = useSafeAreaInsets();
   const { setVehicle } = useAuthStore();
 
   const [vehicles, setVehicles] = useState<VehicleModel[]>([]);
@@ -40,7 +34,7 @@ export default function VehicleSelectScreen() {
   const handleConfirm = async () => {
     if (!selected) return;
     const model = vehicles.find(v => v.id === selected)!;
-    const nickname = `我的${CATEGORY_LABEL[model.category] ?? model.name}`;
+    const nickname = VEHICLE_NICKNAME_PREFIX + (VEHICLE_CATEGORY_LABEL[model.category] ?? model.name);
     setConfirming(true);
     try {
       const created = await selectVehicle(selected, nickname);
@@ -79,7 +73,7 @@ export default function VehicleSelectScreen() {
             </Text>
           </View>
           <Text style={styles.categoryTag}>
-            {CATEGORY_LABEL[item.category] ?? item.category}
+            {VEHICLE_CATEGORY_LABEL[item.category] ?? item.category}
           </Text>
         </View>
 
@@ -100,7 +94,7 @@ export default function VehicleSelectScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <View style={[styles.container, { paddingTop: top }]}>
       {/* 标题 */}
       <View style={styles.header}>
         <Text style={styles.title}>选择座驾</Text>
@@ -138,9 +132,9 @@ export default function VehicleSelectScreen() {
             </>
           )}
         </TouchableOpacity>
-        <Text style={styles.hintText}>选择后可在"我的"中随时更改</Text>
+        <Text style={styles.hintText}>选择后可在"我的 → 管理座驾"中更改</Text>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

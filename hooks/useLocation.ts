@@ -5,9 +5,35 @@ import { useRideStore } from '../store/rideStore';
 import { pointCache } from '../utils/pointCache';
 import { wgs84ToGcj02 } from '../utils/coordTransform';
 
+// 精度过滤策略：
+// - 有速度（> 0.5 m/s ≈ 1.8 km/h）时接受 100m 以内 —— 运动中 GPS 更可信
+// - 静止或低速时接受 50m 以内
+// 不再硬截 20m，城市骑行精度经常 30-80m
+function shouldAccept(accuracy: number | null | undefined, speedMs: number): boolean {
+  if (accuracy == null) return false;
+  if (speedMs > 0.5) return accuracy <= 100;
+  return accuracy <= 50;
+}
+
+const SMOOTH_WINDOW = 5;
+
+function smoothCoords(
+  buf: { lat: number; lng: number }[],
+  lat: number,
+  lng: number,
+): { lat: number; lng: number } {
+  buf.push({ lat, lng });
+  if (buf.length > SMOOTH_WINDOW) buf.shift();
+  // 不够 5 个时用现有的，除以实际长度
+  const avgLat = buf.reduce((s, p) => s + p.lat, 0) / buf.length;
+  const avgLng = buf.reduce((s, p) => s + p.lng, 0) / buf.length;
+  return { lat: avgLat, lng: avgLng };
+}
+
 export function useLocation() {
   const addPoint = useRideStore(s => s.addPoint);
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
+  const smoothBufRef = useRef<{ lat: number; lng: number }[]>([]);
 
   const startTracking = async (): Promise<boolean> => {
     const { status } = await Location.requestForegroundPermissionsAsync();
@@ -16,27 +42,29 @@ export function useLocation() {
       return false;
     }
 
+    smoothBufRef.current = [];
+
     subscriptionRef.current = await Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.BestForNavigation,
         timeInterval: 1000,
-        distanceInterval: 2,
+        distanceInterval: 0,
       },
       (location) => {
-        // 丢弃精度差的点（accuracy > 20m），避免轨迹乱跳
-        if (location.coords.accuracy && location.coords.accuracy > 20) return;
+        const { latitude, longitude, accuracy, altitude, speed } = location.coords;
+        const speedMs = speed ?? 0;
 
-        // WGS-84 → GCJ-02，匹配高德地图坐标系
-        const { lat, lng } = wgs84ToGcj02(
-          location.coords.latitude,
-          location.coords.longitude
-        );
+        if (!shouldAccept(accuracy, speedMs)) return;
+
+        const raw = wgs84ToGcj02(latitude, longitude);
+        const { lat, lng } = smoothCoords(smoothBufRef.current, raw.lat, raw.lng);
+
         const point = {
           lat,
           lng,
-          altitude: location.coords.altitude ?? 0,
-          speed: (location.coords.speed ?? 0) * 3.6, // m/s → km/h
-          accuracy: location.coords.accuracy ?? 0,
+          altitude: altitude ?? 0,
+          speed: speedMs * 3.6,
+          accuracy: accuracy ?? 0,
           recorded_at: new Date(location.timestamp).toISOString(),
           seq: location.timestamp,
         };
@@ -50,6 +78,7 @@ export function useLocation() {
   const stopTracking = () => {
     subscriptionRef.current?.remove();
     subscriptionRef.current = null;
+    smoothBufRef.current = [];
   };
 
   return { startTracking, stopTracking };

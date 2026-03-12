@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, View } from 'react-native';
+import { OfflineSyncBanner } from '../components/OfflineSyncBanner';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Slot, useRouter, useSegments } from 'expo-router';
+import { Stack, useRouter, useSegments } from 'expo-router';
 import { useFonts } from 'expo-font';
 import {
   SpaceGrotesk_400Regular,
@@ -92,29 +93,16 @@ export default function RootLayout() {
   useEffect(() => {
     if (!bootstrapped || !fontsLoaded) return;
 
-    const inAuthGroup = segments[0] === '(auth)';
     const inTabsGroup = segments[0] === '(tabs)';
+    const inTabsLogin = inTabsGroup && segments[1] === 'login';
     const inVehicleSelect = segments[0] === 'vehicle';
-    const inRideGroup = segments[0] === 'ride'; // 骑行记录列表、骑行详情
 
-    if (!token) {
-      if (!inAuthGroup) {
-        router.replace('/(auth)/login');
-      }
-      return;
-    }
+    // 无 token：允许未登录浏览（tabs/login 是正常路径，其他 tabs 页面也允许浏览）
+    if (!token) return;
 
-    if (token && !hasVehicle) {
-      if (!inVehicleSelect) {
-        router.replace('/vehicle/select');
-      }
-      return;
-    }
-
-    if (token && hasVehicle) {
-      if (!inTabsGroup && !inRideGroup) {
-        router.replace('/(tabs)/cockpit');
-      }
+    // 已登录：如果还停在登录页则跳走
+    if (token && inTabsLogin) {
+      router.replace('/(tabs)/cockpit');
     }
   }, [bootstrapped, fontsLoaded, token, hasVehicle, segments, router]);
 
@@ -133,6 +121,11 @@ export default function RootLayout() {
     );
   }
 
-  return <Slot />;
+  return (
+    <View style={{ flex: 1 }}>
+      <OfflineSyncBanner />
+      <Stack screenOptions={{ headerShown: false }} />
+    </View>
+  );
 }
 

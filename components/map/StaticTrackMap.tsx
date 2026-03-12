@@ -3,7 +3,7 @@
  * 自动缩放以显示全程轨迹，不显示当前位置，不跟随
  */
 
-import { useEffect, useRef } from 'react';
+import { useRef } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { AMAP_KEY, AMAP_SECURITY_CODE } from '../../constants/config';
@@ -108,17 +108,13 @@ export function StaticTrackMap({ trackPoints, style }: Props) {
   const webViewRef = useRef<WebView>(null);
   const drawnRef = useRef(false);
 
-  useEffect(() => {
+  const sendTrack = () => {
     if (trackPoints.length < 2 || drawnRef.current) return;
     drawnRef.current = true;
-    // 等地图加载完成后再发消息（500ms 延迟保险）
-    const t = setTimeout(() => {
-      webViewRef.current?.postMessage(
-        JSON.stringify({ type: 'DRAW_TRACK', points: trackPoints })
-      );
-    }, 500);
-    return () => clearTimeout(t);
-  }, [trackPoints]);
+    webViewRef.current?.postMessage(
+      JSON.stringify({ type: 'DRAW_TRACK', points: trackPoints })
+    );
+  };
 
   return (
     <View style={[styles.container, style]}>
@@ -129,6 +125,7 @@ export function StaticTrackMap({ trackPoints, style }: Props) {
         javaScriptEnabled
         domStorageEnabled
         originWhitelist={['*']}
+        onLoadEnd={sendTrack}
         onError={() => {}}
       />
     </View>

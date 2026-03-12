@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/colors';
 import { rideService } from '../../services/rideService';
 import { RideCard } from '../../components/ride/RideCard';
 import { formatDistance, formatDuration } from '../../utils/formatters';
+import { useRequireAuth } from '../../hooks/useRequireAuth';
 
 interface RideRecord {
   id: string;
@@ -20,7 +22,11 @@ interface RideRecord {
 }
 
 export default function RideRecordsScreen() {
+  const isAuthed = useRequireAuth();
   const router = useRouter();
+  const { selectForRoute } = useLocalSearchParams<{ selectForRoute?: string }>();
+  const isSelectMode = selectForRoute === 'true';
+  const { top } = useSafeAreaInsets();
   const [rides, setRides] = useState<RideRecord[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -34,14 +40,16 @@ export default function RideRecordsScreen() {
   const totalDistance = rides.reduce((s, r) => s + r.distance_m, 0);
   const totalDuration = rides.reduce((s, r) => s + r.duration_sec, 0);
 
+  if (!isAuthed) return null;
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingTop: top }]}>
       {/* 标题栏 */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="chevron-back" size={24} color={Colors.textPrimary} />
         </TouchableOpacity>
-        <Text style={styles.title}>骑行记录</Text>
+        <Text style={styles.title}>{isSelectMode ? '选择骑行记录' : '骑行记录'}</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -82,7 +90,10 @@ export default function RideRecordsScreen() {
           renderItem={({ item }) => (
             <RideCard
               ride={item}
-              onPress={() => router.push(`/ride/${item.id}`)}
+              onPress={() => {
+                if (isSelectMode) router.push(`/route/create?rideId=${item.id}`);
+                else router.push(`/ride/${item.id}`);
+              }}
             />
           )}
         />
@@ -97,7 +108,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingTop: 56,
+    paddingTop: 12,
     paddingBottom: 12,
     paddingHorizontal: 16,
     borderBottomWidth: 1,
