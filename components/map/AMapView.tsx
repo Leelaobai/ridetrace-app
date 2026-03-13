@@ -94,7 +94,10 @@ function buildMapHTML(amapKey: string, securityCode: string) {
         window._pendingTrack = points;
         return;
       }
-      if (points.length < 2) return;
+      if (points.length < 2) {
+        resetTrack();
+        return;
+      }
 
       window._rawPoints = points;
       window._trackTipAdded = false;

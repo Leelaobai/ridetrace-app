@@ -22,6 +22,7 @@ import { useLocation } from '../../hooks/useLocation';
 import { pointCache } from '../../utils/pointCache';
 import { wgs84ToGcj02 } from '../../utils/coordTransform';
 import { BACKGROUND_LOCATION_TASK } from '../_layout';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 
 // ─── 工具 ──────────────────────────────────────────────
 function formatDuration(sec: number) {
@@ -486,6 +487,19 @@ export default function CockpitScreen() {
     (raw) => setLiveLocation(raw),
     (seq) => { lastFgSeqRef.current = Math.max(lastFgSeqRef.current, seq); },
   );
+
+  // 骑行中（含暂停）保持屏幕常亮，结束后恢复系统默认熄屏策略
+  useEffect(() => {
+    const tag = 'cockpit-ride';
+    if (store.status !== 'ready') {
+      activateKeepAwakeAsync(tag);
+    } else {
+      deactivateKeepAwake(tag);
+    }
+    return () => {
+      deactivateKeepAwake(tag);
+    };
+  }, [store.status]);
 
   const handleVehicleSelect = async (v: MyVehicleDetail) => {
     setShowVehiclePicker(false);
